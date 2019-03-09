@@ -171,7 +171,7 @@ Function vGPUSystemCapacity {
 					$LocOfvGPU = $ActivevGPUs.vGPUname.indexof($CurrvGPU)
 				}
 				if($LocOfvGPU -lt 0){
-					if ($vm.powerState -eq "PoweredOff"){ #create with a powered off VM
+					if ($vm.powerState -eq "PoweredOff" -or $vm.powerState -eq "Suspended"){ #create with a powered off VM
 						$obj = [pscustomobject]@{vGPUname=$CurrvGPU;vGPUon=0;vGPUoff=1}; $ActivevGPUs.add($obj)|out-null 
 					}
 					else{ #create with assumed powered on VM
@@ -179,7 +179,7 @@ Function vGPUSystemCapacity {
 					}
 				}
 				else{ 
-					if ($vm.powerState -eq "PoweredOff"){ #create with a powered off VM
+					if ($vm.powerState -eq "PoweredOff" -or $vm.powerState -eq "Suspended"){ #create with a powered off VM
 						$ActivevGPUs[$LocOfvGPU].vGPUoff++
 					}
 					else {
@@ -226,6 +226,11 @@ Function vGPUSystemCapacity {
 		$vGPUholds = $vGPUlist[$vGPUlist.vGPUname.indexof($MyChosenvGPU)].vGPUperBoard #Find matching vGPU profile, this will be populated unless the code is mucked with
 		$RemaingvGPUs = ($CardsAv * $vGPUholds)-$vGPUactive #Total cards avalibe for use times how much they support less whats already on.
 
+		#Do some cleanup just to make sure the arrays go away
+		$ActivevGPUs = $null #cleanup afterwards 
+		$vGPUlist = $null
+		$GPUCards = $null
+		
 		#inteligence problem... This doesn't take into account vGPUs spread across multiple cards 
 		return $RemaingvGPUs 
 	}
