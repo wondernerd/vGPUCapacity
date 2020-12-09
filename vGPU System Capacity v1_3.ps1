@@ -1,6 +1,6 @@
 ############################################################################
-# vGPU System Capcity for PowerCLI Version 1.3
-# Copyright (C) 2019 Tony Foster
+# vGPU System Capcity for PowerCLI Version 1.5
+# Copyright (C) 2019-2020 Tony Foster
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
 # the Free Software Foundation, either version 3 of the License, or
@@ -128,25 +128,34 @@ Function vGPUSystemCapacity {
 		$vGPUType = $vGPUType.ToLower() #Make the string passed lowercase
 		
 		#Figure out GRID cards in hosts
+		#$vmhost.ExtensionData.Config.SharedPassthruGpuTypes
+		
 		# Create a list of in use vGPUs, this is populated later
 		[System.Collections.ArrayList]$GPUCards = @()
-
-		get-vmhost -state $vGPUHostState -location $vGPULocations | Get-VMHostPciDevice -deviceClass DisplayController -Name "NVIDIA Corporation NVIDIATesla*" | ForEach-Object {
-			$CurrGPU = ($_.Name -split " ")[3] #only get the last part of the GPU name ie P4
-			$LocOfGPU = -1
-			if($null -ne $GPUCards -and @($GPUCards).count -gt 0){
-				$LocOfGPU = $GPUCards.GPUname.indexof($CurrGPU)
-			}
-			if($LocOfGPU -lt 0){
-				#write-Host "no match should add an element"
-				$obj = [pscustomobject]@{GPUname=$CurrGPU;GPUcnt=1}; $GPUCards.add($obj)|out-null 
-			}
-			else{ 
-				#write-Host "Matches vGPU should incirment"
-				$GPUcards[$LocOfGPU].GPUcnt++
+		
+		Try {
+			get-vmhost -state $vGPUHostState -location $vGPULocations | Get-VMHostPciDevice -deviceClass DisplayController -Name "NVIDIA Corporation NVIDIATesla*" | ForEach-Object {
+				$CurrGPU = ($_.Name -split " ")[3] #only get the last part of the GPU name ie P4
+				#write-Host "GPU type: " $CurrGPU 
+				$LocOfGPU = -1
+				if($null -ne $GPUCards -and @($GPUCards).count -gt 0){
+					$LocOfGPU = $GPUCards.GPUname.indexof($CurrGPU)
+				}
+				if($LocOfGPU -lt 0){
+					#write-Host "no match should add an element"
+					$obj = [pscustomobject]@{GPUname=$CurrGPU;GPUcnt=1}; $GPUCards.add($obj)|out-null 
+				}
+				else{ 
+					#write-Host "Matches vGPU should incirment"
+					$GPUcards[$LocOfGPU].GPUcnt++
+				}
 			}
 		}
-				
+		Catch {
+			write-Host "Error processing GPU cards in hosts"
+			return -2 #return an invalid value so user can test
+			Break #stop working
+		}
 		#********************************************************
 		#Testing objects. Add multiple cards here
 		#$obj = [pscustomobject]@{GPUname="P40";GPUcnt=3}; $GPUCards.add($obj)|out-null
@@ -161,32 +170,48 @@ Function vGPUSystemCapacity {
 		# Create a list of in use vGPUs, this is populated later
 		[System.Collections.ArrayList]$ActivevGPUs = @()
 		#$obj = [pscustomobject]@{vGPUname="grid_p4-8q";vGPUon=0;vGPUoff=0}; $ActivevGPUs.add($obj)|out-null #primeing object Should not do this
-
-
-		foreach($vm in Get-vm "*"){
-			$CurrvGPU = $vm.ExtensionData.config.hardware.device.backing.vgpu
-			if($CurrvGPU -match "grid"){
-				$LocOfvGPU = -1
-				if ($null -ne $ActivevGPUs -and @($ActivevGPUs).count -gt 0){ #make sure not working with a null array
-					$LocOfvGPU = $ActivevGPUs.vGPUname.indexof($CurrvGPU)
-				}
-				if($LocOfvGPU -lt 0){
-					if ($vm.powerState -eq "PoweredOff" -or $vm.powerState -eq "Suspended"){ #create with a powered off VM
-						$obj = [pscustomobject]@{vGPUname=$CurrvGPU;vGPUon=0;vGPUoff=1}; $ActivevGPUs.add($obj)|out-null 
+		
+		Try {
+			$VMs = get-cluster $vGPULocations | Get-vm  #Change from Fabian Lenz (@lenzker) Feb 7, 2020
+			foreach($vm in Get-vm "*"){
+				$CurrvGPU = $vm.ExtensionData.config.hardware.device.backing.vgpu
+				if($CurrvGPU -match "grid"){
+					#write-Host "vGPU array: " $ActivevGPUs
+					$LocOfvGPU = -1
+					if ($null -ne $ActivevGPUs -and @($ActivevGPUs).count -gt 0){ #make sure not working with a null array
+						$LocOfvGPU = $ActivevGPUs.vGPUname.indexof($CurrvGPU)
 					}
-					else{ #create with assumed powered on VM
-						$obj = [pscustomobject]@{vGPUname=$CurrvGPU;vGPUon=1;vGPUoff=0}; $ActivevGPUs.add($obj)|out-null 				
+					#write-Host "loc of GPU: "$LocOfvGPU
+					if($LocOfvGPU -lt 0){
+						if ($vm.powerState -eq "PoweredOff" -or $vm.powerState -eq "Suspended"){ #create with a powered off VM #Added suspended in 1.4
+							$obj = [pscustomobject]@{vGPUname=$CurrvGPU;vGPUon=0;vGPUoff=1}; $ActivevGPUs.add($obj)|out-null 
+							#write-Host "1vGPU off or suspended: " $vm
+							#write-Host "Details: " $ActivevGPUs[$LocOfvGPU]
+						}
+						else{ #create with assumed powered on VM
+							$obj = [pscustomobject]@{vGPUname=$CurrvGPU;vGPUon=1;vGPUoff=0}; $ActivevGPUs.add($obj)|out-null 	
+							#write-Host "1vGPU on: " $vm
+						}
 					}
-				}
-				else{ 
-					if ($vm.powerState -eq "PoweredOff" -or $vm.powerState -eq "Suspended"){ #create with a powered off VM
-						$ActivevGPUs[$LocOfvGPU].vGPUoff++
-					}
-					else {
-						$ActivevGPUs[$LocOfvGPU].vGPUon++
+					else{ 
+						if ($vm.powerState -eq "PoweredOff" -or $vm.powerState -eq "Suspended"){ #create with a powered off VM #Added suspended in 1.4
+							#write-Host "2vGPU off or suspended: " $vm
+							#write-Host "Details: " $ActivevGPUs[$LocOfvGPU]
+							$ActivevGPUs[$LocOfvGPU].vGPUoff++
+							#write-Host "2vGPU off or suspended: " $vm
+						}
+						else {
+							$ActivevGPUs[$LocOfvGPU].vGPUon++
+							#write-Host "2vGPU on: " $vm
+						}
 					}
 				}
 			}
+		}
+		Catch {
+			write-Host "Error counting number of active vGPU based VMs"
+			return -3 #return an invalid value so user can test
+			Break #stop working
 		}
 		
 		#********************************************************
@@ -196,40 +221,61 @@ Function vGPUSystemCapacity {
 		#write-Host "Added a grid_p4-1q with 5 VMs on"
 		#********************************************************
 		
-		$MyChosenvGPU = $vGPUType #"grid_p4-4q" #what sort of vGPU do we want to see the capacity of
-		$MatchingGPU = (($MyChosenvGPU -split "_")[1] -split "-")[0] #only get the half with the GPU name
-		$MatchingGPU = $MatchingGPU.ToUpper()
-		if($null -ne $GPUCards -and @($GPUCards).count -gt 0){ #make sure not working with a null array
+		Try {
+			$MyChosenvGPU = $vGPUType #"grid_p4-4q" #what sort of vGPU do we want to see the capacity of
+			$MatchingGPU = (($MyChosenvGPU -split "_")[1] -split "-")[0] #only get the half with the GPU name
+			$MatchingGPU = $MatchingGPU.ToUpper()
+			#write-Host "found the card: " $MatchingGPU
+			if($null -ne $GPUCards -and @($GPUCards).count -gt 0){ #make sure not working with a null array
 
-			if($GPUCards.GPUname.indexof($MatchingGPU) -gt -1) { #make sure the card exsists in the system
-				$CardsAv = $GPUcards[$GPUCards.GPUname.indexof($MatchingGPU)].GPUcnt #how many cards
+				if($GPUCards.GPUname.indexof($MatchingGPU) -gt -1) { #make sure the card exsists in the system
+					$CardsAv = $GPUcards[$GPUCards.GPUname.indexof($MatchingGPU)].GPUcnt #how many cards
+					
+				}
+				else {$CardsAv=0} #if we cant find the card set it to no cards
 			}
-			else {$CardsAv=0} #if we cant find the card set it to no cards
+			else {$CardsAv=0} #If we dont have any GPUs in the array set to 0
 		}
-		else {$CardsAv=0} #If we dont have any GPUs in the array set to 0
+		Catch {
+			write-Host "Error processing GPU slot matching"
+			return -4 #return an invalid value so user can test
+			Break #stop working
+		}
 		
-		$vGPUactive=0
-		if ($null -ne $ActivevGPUs -and @($ActivevGPUs).count -gt 0){ #make sure not working with a null array
-			if($ActivevGPUs.vGPUname.indexof($MyChosenvGPU) -gt -1){ #Check to see if the vGPU is active
-				$vGPUactive = $ActivevGPUs[$ActivevGPUs.vGPUname.indexof($MyChosenvGPU)].vGPUon #how many current vGPUs are on
-			}
-			foreach($vGPU in $ActivevGPUs){
-				if ($MatchingGPU.ToLower() -eq (($vGPU.vGPUname -split "_")[1] -split "-")[0]){ #only consider valid GPUs skip the rest
-					if ($vGPU.vGPUon -gt 0 -and $vGPU.vGPUname -ne $MyChosenvGPU){ #if vGPUs are on and its not the vGPU being considered
-						$CardsAv = $CardsAv - [math]::ceiling($vGPU.vGPUon / $vGPUlist[$vGPUlist.vGPUname.indexof($vGPU.vGPUname)].vGPUperBoard) #figure out how many cards this uses
+		Try {
+			$vGPUactive=0
+			if ($null -ne $ActivevGPUs -and @($ActivevGPUs).count -gt 0){ #make sure not working with a null array
+				if($ActivevGPUs.vGPUname.indexof($MyChosenvGPU) -gt -1){ #Check to see if the vGPU is active
+					$vGPUactive = $ActivevGPUs[$ActivevGPUs.vGPUname.indexof($MyChosenvGPU)].vGPUon #how many current vGPUs are on
+				}
+				foreach($vGPU in $ActivevGPUs){
+					if ($MatchingGPU.ToLower() -eq (($vGPU.vGPUname -split "_")[1] -split "-")[0]){ #only consider valid GPUs skip the rest
+						if ($vGPU.vGPUon -gt 0 -and $vGPU.vGPUname -ne $MyChosenvGPU){ #if vGPUs are on and its not the vGPU being considered
+							$CardsAv = $CardsAv - [math]::ceiling($vGPU.vGPUon / $vGPUlist[$vGPUlist.vGPUname.indexof($vGPU.vGPUname)].vGPUperBoard) #figure out how many cards this uses
+						}
 					}
 				}
 			}
+			else {$vGPUactive=0} #No running vGPUs
 		}
-		else {$vGPUactive=0} #No running vGPUs
+		Catch {
+			write-Host "Error processing free slots"
+			return -5 #return an invalid value so user can test
+			Break #stop working
+		}
 		
 		$vGPUholds = $vGPUlist[$vGPUlist.vGPUname.indexof($MyChosenvGPU)].vGPUperBoard #Find matching vGPU profile, this will be populated unless the code is mucked with
+		#write-Host "Cards avalible: " $CardsAv
+		#write-Host "vGPU holds: " $vGPUholds
+		#write-Host "vGPUs Active: " $vGPUactive
 		$RemaingvGPUs = ($CardsAv * $vGPUholds)-$vGPUactive #Total cards avalibe for use times how much they support less whats already on.
-
-		#Do some cleanup just to make sure the arrays go away
+		
+		#added in version 1.4
 		$ActivevGPUs = $null #cleanup afterwards 
 		$vGPUlist = $null
 		$GPUCards = $null
+		#end add
+		
 		
 		#inteligence problem... This doesn't take into account vGPUs spread across multiple cards 
 		return $RemaingvGPUs 
@@ -243,4 +289,4 @@ Function vGPUSystemCapacity {
 
 # Example: vGPUSystemCapacity "grid_p4-2q" "*" "maintenance"
 
-vGPUSystemCapacity "grid_p4-4Q" "*" "Connected"
+#vGPUSystemCapacity "grid_p4-2Q" "*" "connected"
